@@ -55,7 +55,7 @@
 실행할 때 다음 파일들을 같은 폴더에 둡니다.
 
 ```text
-dorori_motor_bundle/
+2026ESWContest_free_DoroRi/
 ├── dorori_debug_speed.py
 ├── dorori_debug_speed.html
 ├── dorori_obd.py
@@ -83,14 +83,14 @@ Raspberry Pi OS 계열에서 권장하는 설치 예시입니다.
 sudo apt update
 sudo apt install -y python3-venv python3-opencv python3-gpiozero python3-lgpio
 
-cd ~/esw/dorori_motor_bundle
+cd ~/2026ESWContest_free_DoroRi
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-`requirements.txt`에는 Flask, Ultralytics, python-OBD 패키지가 들어 있습니다. OpenCV와 GPIO 패키지는 Raspberry Pi OS 패키지를 사용하도록 위에서 `apt`로 설치합니다.
+`requirements.txt`에는 Flask, Ultralytics, python-OBD와 호환되는 NumPy/OpenCV 버전이 들어 있습니다. GPIO 패키지는 Raspberry Pi OS 패키지를 사용하도록 위에서 `apt`로 설치합니다.
 
 ---
 
@@ -132,7 +132,7 @@ MOTOR_DEPLOY_DIRECTION=0 python dorori_debug_speed.py
 ### 5-1. GPIO 없이 전체 UI/상태머신 먼저 시험
 
 ```bash
-cd ~/esw/dorori_motor_bundle
+cd ~/2026ESWContest_free_DoroRi
 source .venv/bin/activate
 MOTOR_DRY_RUN=1 python dorori_debug_speed.py
 ```
@@ -185,7 +185,7 @@ sudo usermod -aG dialout "$USER"
 ### 6-2. 자동 포트 검색
 
 ```bash
-cd ~/esw/dorori_motor_bundle
+cd ~/2026ESWContest_free_DoroRi
 source .venv/bin/activate
 python dorori_obd.py
 ```

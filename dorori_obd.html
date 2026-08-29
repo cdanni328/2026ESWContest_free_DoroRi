@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<title>DORORI OBD</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#151b23; --panel-2:#1b2330; --line:#263141;
+    --text:#e8edf2; --text-dim:#7c8a9c; --accent:#4d7cff;
+    --safe:#3ddc84; --caution:#ffc23d; --danger:#ff5470; --idle:#3a4657;
+    --car-body:#2c3646; --car-body-2:#232c39;
+  }
+  *{box-sizing:border-box; user-select:none; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Pretendard,sans-serif;
+    overflow:hidden;
+  }
+  button,select,input{font:inherit;}
+
+  .app{
+    position:relative; width:100%; height:100vh; height:100dvh;
+    max-width:900px; margin:0 auto; overflow:hidden;
+  }
+  .app::after{
+    content:""; position:absolute; inset:0; z-index:30; pointer-events:none;
+    border:3px solid transparent; background:transparent; opacity:0;
+  }
+  @keyframes dangerScreenPulse{
+    0%,100%{opacity:.05; background:rgba(255,84,112,.08); border-color:rgba(255,84,112,.35);}
+    50%{opacity:.28; background:rgba(255,84,112,.28); border-color:rgba(255,84,112,.9);}
+  }
+  .app.danger-active::after{animation:dangerScreenPulse 1200ms ease-in-out infinite;}
+  @media (prefers-reduced-motion:reduce){
+    .app.danger-active::after{animation:none; opacity:.16; background:rgba(255,84,112,.16); border-color:var(--danger);}
+  }
+
+  .topbar{
+    height:64px; display:flex; align-items:center; justify-content:space-between;
+    padding:0 18px; border-bottom:1px solid var(--line); position:relative; z-index:35;
+    background:rgba(13,17,23,.96);
+  }
+  .brand{font-weight:800; font-size:17px; letter-spacing:.02em; white-space:nowrap;}
+  .brand small{font-size:10px; color:var(--text-dim); font-weight:600; margin-left:4px;}
+  .top-actions{display:flex; align-items:center; min-width:0;}
+  .source-badge{
+    font-size:10px; font-weight:700; color:var(--text-dim); border:1px solid var(--line);
+    background:var(--panel-2); border-radius:999px; padding:5px 8px; margin-right:8px; white-space:nowrap;
+  }
+  .source-badge.ok{color:var(--safe); border-color:rgba(61,220,132,.35);}
+  .source-badge.bad{color:var(--danger); border-color:rgba(255,84,112,.45);}
+  .speed-readout{
+    position:absolute; top:78px; right:max(14px,env(safe-area-inset-right)); z-index:35;
+    min-width:118px; padding:10px 12px; border:1px solid var(--line); border-radius:14px;
+    background:rgba(21,27,35,.9); text-align:right; font-variant-numeric:tabular-nums;
+    box-shadow:0 8px 24px rgba(0,0,0,.2); pointer-events:none;
+  }
+  .speed-readout .speed-label{display:block; color:var(--safe); font-size:9px; font-weight:800; letter-spacing:.09em;}
+  .speed-readout .speed-value{display:flex; align-items:baseline; justify-content:flex-end; gap:5px; white-space:nowrap;}
+  .speed-readout b{color:var(--text); font-size:32px; line-height:1.15; font-weight:850;}
+  .speed-readout small{color:var(--text-dim); font-size:10px; font-weight:700;}
+  .speed-readout.stale{opacity:.5;}
+  .speed-readout.stale .speed-label{color:var(--danger);}
+  .power-toggle{display:flex; align-items:center; gap:8px; cursor:pointer;}
+  .power-label{font-size:11px; color:var(--text-dim); white-space:nowrap;}
+  .switch{width:46px; height:26px; background:var(--panel-2); border:1px solid var(--line); border-radius:99px; position:relative; transition:.2s;}
+  .switch::after{content:""; position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%; background:var(--text-dim); transition:.2s;}
+  .switch.on{background:var(--accent);}
+  .switch.on::after{left:22px; background:#fff;}
+
+  .screens{position:relative; width:100%; height:calc(100% - 64px);}
+  .screen{position:absolute; inset:0; display:flex; flex-direction:column; transition:transform .32s cubic-bezier(.22,.61,.36,1),opacity .32s;}
+  #screenMain{transform:translateX(0); align-items:center; justify-content:center;}
+  #screenDetail{transform:translateX(100%); padding:20px; overflow-y:auto;}
+  .app.detail-open #screenMain{transform:translateX(-25%); opacity:.4;}
+  .app.detail-open #screenDetail{transform:translateX(0);}
+
+  .off-screen{
+    position:absolute; top:64px; left:0; right:0; bottom:0; z-index:20;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:10px; color:var(--text-dim); background:var(--bg); transition:opacity .25s;
+  }
+  .off-screen .icon{font-size:36px; opacity:.5;}
+  .off-screen .msg{font-size:14px;}
+  .off-screen .sub{font-size:12px; opacity:.65; text-align:center; padding:0 24px;}
+
+  .stage{position:relative; width:100%; max-width:420px; height:70vh; margin:0 auto;}
+  .car{
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:44%; aspect-ratio:190/380; background:linear-gradient(180deg,var(--car-body),var(--car-body-2));
+    border-radius:15% 15% 6% 6%; border:1px solid var(--line);
+  }
+  .car::before{content:""; position:absolute; top:11%; left:10%; right:10%; height:21%; background:rgba(77,124,255,.14); border-radius:14% 14% 5% 5%; border:1px solid rgba(77,124,255,.25);}
+  .car::after{content:""; position:absolute; bottom:13%; left:12%; right:12%; height:15%; background:rgba(77,124,255,.08); border-radius:5%; border:1px solid var(--line);}
+  .wheel{position:absolute; width:9%; height:10%; background:#0d1117; border-radius:30%;}
+  .wheel.fl{top:15%; left:-4.5%;}.wheel.fr{top:15%; right:-4.5%;}.wheel.rl{bottom:15%; left:-4.5%;}.wheel.rr{bottom:15%; right:-4.5%;}
+  .seat{position:absolute; width:0; height:0;}
+  .seat.fl{left:0; top:24%;}.seat.fr{right:0; top:24%;}.seat.rl{left:0; top:61%;}.seat.rr{right:0; top:61%;}
+  .seat-btn{position:absolute; top:50%; transform:translateY(-50%); display:flex; align-items:center; gap:9px; background:none; border:none; color:var(--text); cursor:pointer; padding:10px;}
+  .seat.fl .seat-btn,.seat.rl .seat-btn{left:-118px; flex-direction:row-reverse;}
+  .seat.fr .seat-btn,.seat.rr .seat-btn{right:-118px;}
+  .seat-btn:disabled{cursor:default; opacity:.35;}
+  .seat-dot{width:24px; height:24px; border-radius:50%; background:var(--idle); flex-shrink:0; transition:.3s;}
+  .seat-dot.safe{background:var(--safe); box-shadow:0 0 16px var(--safe);}
+  .seat-dot.caution{background:var(--caution); box-shadow:0 0 16px var(--caution);}
+  .seat-dot.danger{background:var(--danger); box-shadow:0 0 16px var(--danger);}
+  @keyframes dotPulse{0%,100%{box-shadow:0 0 18px var(--danger); opacity:1;}50%{box-shadow:0 0 4px var(--danger); opacity:.52;}}
+  .seat-dot.danger.pulsing{animation:dotPulse 1200ms ease-in-out infinite;}
+  .seat-label{font-size:11px; color:var(--text-dim); white-space:nowrap; text-align:left;}
+  .seat.fl .seat-label,.seat.rl .seat-label{text-align:right;}
+  .seat-label b{display:block; color:var(--text); font-size:12px; font-weight:700;}
+  .main-hint{text-align:center; font-size:12px; color:var(--text-dim); padding:0 20px 24px;}
+
+  .back-btn{display:flex; align-items:center; gap:6px; background:none; border:none; color:var(--text); font-size:15px; font-weight:600; cursor:pointer; padding:8px 4px;}
+  .back-btn svg{width:20px; height:20px;}
+  .detail-title{font-size:13px; color:var(--text-dim); margin-top:8px;}
+  .detail-subtitle{font-size:22px; font-weight:800; margin:2px 0 20px;}
+  .status-badge{display:flex; align-items:center; gap:14px; padding:20px; border-radius:18px; background:var(--panel); border:1px solid var(--line); margin-bottom:16px;}
+  .status-badge .dot{width:42px; height:42px; border-radius:50%; flex-shrink:0;}
+  .status-badge .dot.safe{background:var(--safe); box-shadow:0 0 24px var(--safe);}
+  .status-badge .dot.caution{background:var(--caution); box-shadow:0 0 24px var(--caution);}
+  .status-badge .dot.danger{background:var(--danger); box-shadow:0 0 24px var(--danger);}
+  .status-badge .dot.idle{background:var(--idle);}
+  .status-badge .label{font-size:21px; font-weight:800;}
+  .status-badge .desc{font-size:12.5px; color:var(--text-dim); margin-top:3px; line-height:1.5;}
+
+  .breakdown{background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:6px 20px; margin-bottom:16px;}
+  .breakdown-row{display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 0; border-bottom:1px solid var(--line);}
+  .breakdown-row:last-child{border-bottom:none;}
+  .breakdown-row .name{font-size:14px; color:var(--text-dim);}
+  .breakdown-row .value{font-size:13px; font-weight:700; text-align:right; word-break:break-word;}
+  .value.safe{color:var(--safe);}.value.caution{color:var(--caution);}.value.danger{color:var(--danger);}
+
+  .ramp-section{background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:18px; margin-bottom:16px;}
+  .ramp-section.active{border-color:var(--caution);}
+  .ramp-title{font-size:11px; color:var(--text-dim); letter-spacing:.06em; text-transform:uppercase; margin-bottom:10px; font-weight:700;}
+  .ramp-btn{width:100%; padding:15px; border-radius:12px; border:none; font-size:14px; font-weight:750; cursor:pointer; margin-bottom:8px; background:var(--caution); color:#161200;}
+  .ramp-btn:disabled{opacity:.38; cursor:not-allowed;}
+  .ramp-btn.retract{background:transparent; border:1px solid var(--line); color:var(--text);}
+  .ramp-btn.inactive{background:var(--panel-2); color:var(--text-dim);}
+  .ramp-progress{height:7px; background:#0d1117; border-radius:99px; overflow:hidden; margin:10px 0 7px; display:none;}
+  .ramp-progress.show{display:block;}
+  .ramp-progress-fill{height:100%; width:0; background:var(--caution); transition:width .12s linear;}
+  .ramp-status{font-size:11px; color:var(--text-dim); line-height:1.45;}
+  .updated-at{text-align:center; font-size:11px; color:var(--text-dim); opacity:.65; padding-bottom:12px;}
+
+  .sound-badge{position:fixed; left:10px; bottom:8px; z-index:50; font-size:10px; color:var(--text-dim); opacity:.55; pointer-events:none;}
+
+
+
+  @media (max-width:560px){
+    .topbar{padding:0 12px;}
+    .source-badge{display:none;}
+    .speed-readout{top:76px; right:max(10px,env(safe-area-inset-right)); min-width:104px; padding:8px 10px;}
+    .speed-readout b{font-size:27px;}
+    .power-label{display:none;}
+    #screenDetail{padding:14px;}
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <div class="topbar">
+    <div class="brand">DORORI <small>OBD · 실사용</small></div>
+    <div class="top-actions">
+      <div class="source-badge" id="sourceBadge">연결 확인</div>
+      <div class="power-toggle" id="powerToggle">
+        <span class="power-label" id="powerLabel">인지 대기</span>
+        <div class="switch" id="switchEl"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="speed-readout stale" id="speedReadout" aria-label="OBD2 실시간 속도">
+    <span class="speed-label">OBD2 SPEED</span>
+    <span class="speed-value"><b id="speedVal">-</b><small>km/h</small></span>
+  </div>
+
+
+
+  <div class="off-screen" id="offScreen">
+    <div class="icon">⏻</div>
+    <div class="msg">하차 안전 판단이 꺼져 있습니다</div>
+    <div class="sub">우측 상단 스위치를 누르면 속도 조건에 따라 카메라 추론을 시작합니다.</div>
+  </div>
+
+  <div class="screens">
+    <div class="screen" id="screenMain">
+      <div class="stage">
+        <div class="car">
+          <div class="wheel fl"></div><div class="wheel fr"></div>
+          <div class="wheel rl"></div><div class="wheel rr"></div>
+          <div class="seat fl"><button class="seat-btn" disabled><div class="seat-dot"></div><div class="seat-label">앞좌석 좌<b>-</b></div></button></div>
+          <div class="seat fr"><button class="seat-btn" disabled><div class="seat-dot"></div><div class="seat-label">앞좌석 우<b>-</b></div></button></div>
+          <div class="seat rl"><button class="seat-btn" disabled><div class="seat-dot"></div><div class="seat-label">뒷좌석 좌<b>-</b></div></button></div>
+          <div class="seat rr"><button class="seat-btn" id="seatRRBtn"><div class="seat-dot" id="dotRR"></div><div class="seat-label">뒷좌석 우<b id="labelRR">대기</b></div></button></div>
+        </div>
+      </div>
+      <div class="main-hint">뒷좌석 우측 표시를 눌러 상세 상태와 발판 동작을 확인하세요</div>
+    </div>
+
+    <div class="screen" id="screenDetail" data-open="0">
+      <button class="back-btn" id="backBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        뒤로
+      </button>
+      <div class="detail-title">뒷좌석 우측</div>
+      <div class="detail-subtitle">RR 도어</div>
+
+      <div class="status-badge">
+        <div class="dot idle" id="badgeDot"></div>
+        <div><div class="label" id="badgeLabel">대기 중</div><div class="desc" id="badgeDesc">비전 판단을 기다리고 있습니다.</div></div>
+      </div>
+
+      <div class="breakdown">
+        <div class="breakdown-row"><div class="name">연석</div><div class="value" id="curbValue">-</div></div>
+        <div class="breakdown-row"><div class="name">배수로</div><div class="value" id="drainValue">-</div></div>
+        <div class="breakdown-row"><div class="name">맨홀</div><div class="value" id="manholeValue">-</div></div>
+        <div class="breakdown-row"><div class="name">노면 상태</div><div class="value" id="surfaceValue">-</div></div>
+      </div>
+
+      <div class="ramp-section" id="rampSection">
+        <div class="ramp-title">발판 제어 · 자동 복귀</div>
+        <button class="ramp-btn inactive" id="deployBtn" disabled>발판 전개 · 5초 후 자동 수납</button>
+        <button class="ramp-btn retract" id="retractBtn" style="display:none;">즉시 수납</button>
+        <div class="ramp-progress" id="rampProgress"><div class="ramp-progress-fill" id="rampProgressFill"></div></div>
+        <div class="ramp-status" id="rampStatus">대기 중</div>
+      </div>
+
+      <div class="updated-at" id="updatedAt"></div>
+    </div>
+  </div>
+</div>
+<div class="sound-badge" id="soundBadge">소리: 잠김 (전원 스위치를 눌러 활성화)</div>
+
+<script>
+const app = document.getElementById('app');
+const powerToggle = document.getElementById('powerToggle');
+const switchEl = document.getElementById('switchEl');
+const powerLabel = document.getElementById('powerLabel');
+const offScreen = document.getElementById('offScreen');
+const soundBadge = document.getElementById('soundBadge');
+const sourceBadge = document.getElementById('sourceBadge');
+
+let isOn = false;
+let lastVision = null;
+let latestMotor = null;
+let previousMotorState = null;
+
+/* ===== 소리: 경고음 + 한국어 TTS ===== */
+let audioCtx = null;
+let warnTimer = null;
+let koVoice = null;
+const BEEP_INTERVAL_MS = 1200;
+
+function unlockAudio(){
+  if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if(audioCtx.state === 'suspended') audioCtx.resume();
+  soundBadge.textContent = '소리: 켜짐';
+  try{
+    const warm = new SpeechSynthesisUtterance(' ');
+    warm.volume = 0;
+    speechSynthesis.speak(warm);
+  }catch(e){}
+}
+function tone(freq,startAt,dur,gain=0.15){
+  if(!audioCtx) return;
+  const osc=audioCtx.createOscillator(); const amp=audioCtx.createGain();
+  osc.type='triangle'; osc.frequency.value=freq;
+  amp.gain.setValueAtTime(0,startAt);
+  amp.gain.linearRampToValueAtTime(gain,startAt+.012);
+  amp.gain.setValueAtTime(gain,startAt+dur-.03);
+  amp.gain.linearRampToValueAtTime(0,startAt+dur);
+  osc.connect(amp).connect(audioCtx.destination); osc.start(startAt); osc.stop(startAt+dur+.02);
+}
+function warnBeep(){if(!audioCtx)return; const t=audioCtx.currentTime; tone(880,t,.14); tone(660,t+.17,.18);}
+function startWarn(){if(warnTimer)return; warnBeep(); warnTimer=setInterval(warnBeep,BEEP_INTERVAL_MS);}
+function stopWarn(){if(warnTimer)clearInterval(warnTimer); warnTimer=null;}
+function pickVoice(){
+  if(!window.speechSynthesis)return;
+  const voices=speechSynthesis.getVoices();
+  koVoice=voices.find(v=>v.lang&&v.lang.toLowerCase().startsWith('ko'))||null;
+}
+if(window.speechSynthesis){pickVoice(); speechSynthesis.onvoiceschanged=pickVoice;}
+function say(text){
+  if(!window.speechSynthesis)return;
+  try{
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text); u.lang='ko-KR'; u.rate=1.05; u.volume=1;
+    if(koVoice)u.voice=koVoice; speechSynthesis.speak(u);
+  }catch(e){}
+}
+let prevDecision=null;
+function detectSoundEvents(state){
+  const isDanger=['RED','DANGER','FAULT'].includes(state);
+  const wasDanger=['RED','DANGER','FAULT'].includes(prevDecision);
+  if(isDanger&&!wasDanger){startWarn(); say(state==='FAULT'?'시스템 오류. 상태를 확인하세요.':'위험. 하차하지 마세요.');}
+  if(!isDanger&&wasDanger)stopWarn();
+  if(state==='YELLOW'&&prevDecision!==null&&prevDecision!=='YELLOW') say('연석이 감지되었습니다. 정차 후 발판을 전개합니다.');
+  prevDecision=state;
+}
+
+function syncPowerState(active){
+  isOn=Boolean(active);
+  switchEl.classList.toggle('on',isOn);
+  powerLabel.textContent=isOn?'인지 중':'인지 대기';
+  offScreen.style.opacity=isOn?'0':'1';
+  offScreen.style.pointerEvents=isOn?'none':'auto';
+  if(!isOn){stopWarn(); prevDecision=null; resetSeat(); app.classList.remove('danger-active');}
+}
+
+powerToggle.addEventListener('click',async()=>{
+  unlockAudio();
+  const nextOn=!isOn;
+  try{
+    const res=await fetch(nextOn?'/api/start':'/api/stop',{method:'POST'});
+    if(!res.ok)throw new Error('server');
+    syncPowerState(nextOn);
+    await fetchVision();
+  }catch(e){powerLabel.textContent='서버 오류';}
+});
+
+function resetSeat(){document.getElementById('dotRR').className='seat-dot'; document.getElementById('labelRR').textContent='대기';}
+
+const stateMeta={
+  GREEN:{cls:'safe',label:'안전',badge:'안전 하차 가능',desc:'발판 없이 안전하게 하차할 수 있습니다.'},
+  YELLOW:{cls:'caution',label:'발판 필요',badge:'발판 필요',desc:'연석이 감지되어 정차 후 발판을 전개합니다.'},
+  RED:{cls:'danger',label:'위험',badge:'하차 위험',desc:'현재 위치에서는 하차가 위험합니다.'},
+  FAULT:{cls:'danger',label:'오류',badge:'시스템 오류',desc:'센서·모델·모터 상태를 확인해야 합니다.'},
+  WAITING:{cls:'',label:'대기',badge:'판단 대기',desc:'속도 조건 또는 새 카메라 판단을 기다립니다.'},
+  IDLE:{cls:'',label:'대기',badge:'대기 중',desc:'판단 시작을 기다리고 있습니다.'}
+};
+
+function renderSpeed(data){
+  const el=document.getElementById('speedReadout'); const val=document.getElementById('speedVal');
+  const fresh=data.speed_kmh!==null&&data.speed_kmh!==undefined&&Boolean(data.speed_fresh??data.fresh);
+  el.classList.toggle('stale',!fresh); val.textContent=fresh?Number(data.speed_kmh).toFixed(1):'-';
+
+  const source=data.speed_source??data.source;
+  const connected=data.obd_connected??data.connected;
+  if(source==='manual_debug'){
+    sourceBadge.textContent='수동 속도'; sourceBadge.className='source-badge ok';
+  }else if(connected&&fresh){
+    sourceBadge.textContent='OBD 연결'; sourceBadge.className='source-badge ok';
+  }else{
+    sourceBadge.textContent='OBD 끊김'; sourceBadge.className='source-badge bad';
+  }
+}
+
+async function fetchSpeed(){
+  let delay=200;
+  try{
+    const res=await fetch('/api/vehicle',{cache:'no-store'}); if(!res.ok)throw new Error('server');
+    const data=await res.json(); renderSpeed(data);
+    delay=Number(data.poll_interval_ms)||delay;
+  }catch(e){renderSpeed({}); sourceBadge.textContent='서버 끊김'; sourceBadge.className='source-badge bad';}
+  setTimeout(fetchSpeed,Math.max(100,delay));
+}
+
+function applyVisionToSeat(data){
+  if(!data.active){resetSeat(); return;}
+  const state=data.final_decision||'IDLE'; const meta=stateMeta[state]||stateMeta.IDLE;
+  const dot=document.getElementById('dotRR'); const danger=['RED','DANGER','FAULT'].includes(state);
+  dot.className='seat-dot '+meta.cls; dot.classList.toggle('pulsing',danger);
+  document.getElementById('labelRR').textContent=meta.label;
+  app.classList.toggle('danger-active',danger);
+  detectSoundEvents(state);
+}
+
+function confidenceText(value){return value===null||value===undefined?'':' · '+Math.round(Number(value)*100)+'%';}
+function renderBinary(el,data,positiveClass){
+  if(!data){el.textContent='연동 대기'; el.className='value'; return;}
+  if(data.detected){el.textContent='감지됨'+confidenceText(data.confidence); el.className='value '+positiveClass;}
+  else{el.textContent='감지 안 됨'; el.className='value safe';}
+}
+
+function applyVisionToDetail(data){
+  const state=data.final_decision||'IDLE'; const meta=stateMeta[state]||stateMeta.IDLE;
+  document.getElementById('badgeDot').className='dot '+(meta.cls||'idle');
+  document.getElementById('badgeLabel').textContent=meta.badge;
+  document.getElementById('badgeDesc').textContent=data.reason_text||meta.desc;
+
+  const curbEl=document.getElementById('curbValue');
+  if(data.curb){
+    if(data.curb.detected){
+      const reach=data.curb.reachable?' · 도달 구역':' · 도달 구역 밖';
+      curbEl.textContent='감지됨'+reach+confidenceText(data.curb.confidence);
+      curbEl.className='value '+(data.curb.reachable?'caution':'danger');
+    }else{curbEl.textContent='감지 안 됨'; curbEl.className='value safe';}
+  }else{curbEl.textContent='연동 대기'; curbEl.className='value';}
+
+  renderBinary(document.getElementById('drainValue'),data.drainage||data.drain,'danger');
+  renderBinary(document.getElementById('manholeValue'),data.manhole,'danger');
+
+  const surfaceEl=document.getElementById('surfaceValue');
+  if(data.surface&&data.surface.class_name){
+    surfaceEl.textContent=data.surface.class_name+confidenceText(data.surface.confidence);
+    surfaceEl.className='value '+(data.surface.risky?'danger':'safe');
+  }else{surfaceEl.textContent='연동 대기'; surfaceEl.className='value';}
+
+  document.getElementById('updatedAt').textContent=data.updated_at
+    ?'마지막 비전 갱신: '+new Date(data.updated_at*1000).toLocaleTimeString('ko-KR',{hour12:false})
+    :'';
+  updateDeployButton();
+}
+
+async function fetchVision(){
+  try{
+    const res=await fetch('/api/vision',{cache:'no-store'}); if(!res.ok)return;
+    const data=await res.json(); lastVision=data;
+    syncPowerState(data.active); applyVisionToSeat(data);
+    if(document.getElementById('screenDetail').dataset.open==='1') applyVisionToDetail(data);
+    updateDeployButton();
+  }catch(e){sourceBadge.textContent='서버 끊김'; sourceBadge.className='source-badge bad';}
+}
+
+/* ===== 화면 전환 ===== */
+document.getElementById('seatRRBtn').addEventListener('click',()=>{
+  app.classList.add('detail-open'); document.getElementById('screenDetail').dataset.open='1';
+  if(lastVision)applyVisionToDetail(lastVision);
+});
+document.getElementById('backBtn').addEventListener('click',()=>{
+  app.classList.remove('detail-open'); document.getElementById('screenDetail').dataset.open='0';
+});
+
+/* ===== 모터 상태 및 명령 ===== */
+const rampSection=document.getElementById('rampSection');
+const deployBtn=document.getElementById('deployBtn');
+const retractBtn=document.getElementById('retractBtn');
+const rampProgress=document.getElementById('rampProgress');
+const rampProgressFill=document.getElementById('rampProgressFill');
+const rampStatus=document.getElementById('rampStatus');
+
+deployBtn.addEventListener('click',()=>sendRampCommand('deploy'));
+retractBtn.addEventListener('click',()=>sendRampCommand('retract'));
+
+function canDeployNow(){
+  if(!lastVision||!latestMotor)return false;
+  const stopped=lastVision.speed_kmh!==null&&lastVision.speed_kmh!==undefined&&Number(lastVision.speed_kmh)<=0.1;
+  return Boolean(lastVision.active&&lastVision.final_decision==='YELLOW'&&stopped&&
+    !lastVision.deploy_latched&&latestMotor.ready&&!latestMotor.busy&&latestMotor.state==='IDLE');
+}
+function updateDeployButton(){
+  const enabled=canDeployNow(); deployBtn.disabled=!enabled;
+  deployBtn.classList.toggle('inactive',!enabled);
+  rampSection.classList.toggle('active',Boolean(lastVision&&lastVision.final_decision==='YELLOW'));
+}
+
+function motorTransitionSpeech(state){
+  if(state===previousMotorState)return;
+  if(state==='DEPLOYING')say('발판을 전개합니다.');
+  if(state==='DEPLOYED_HOLD')say('발판 전개가 완료되었습니다. 5초 후 자동으로 수납합니다.');
+  if(state==='IDLE'&&previousMotorState==='RETRACTING')say('발판 수납이 완료되었습니다.');
+  previousMotorState=state;
+}
+
+function renderRampStatus(data){
+  latestMotor=data; const state=data.state||'IDLE'; const progress=Math.max(0,Math.min(100,Number(data.progress||0)));
+  rampProgressFill.style.width=progress+'%';
+  motorTransitionSpeech(state);
+
+  const busy=['STARTING','DEPLOYING','DEPLOYED_HOLD','RETRACTING'].includes(state);
+  rampProgress.classList.toggle('show',busy||state==='ERROR');
+  retractBtn.style.display=['STARTING','DEPLOYING','DEPLOYED_HOLD'].includes(state)?'block':'none';
+  retractBtn.disabled=!['STARTING','DEPLOYING','DEPLOYED_HOLD'].includes(state);
+
+  if(state==='STARTING')rampStatus.textContent='모터 시작 준비 중...';
+  else if(state==='DEPLOYING')rampStatus.textContent=`전개 중 · ${progress.toFixed(0)}%`;
+  else if(state==='DEPLOYED_HOLD')rampStatus.textContent=`전개 유지 중 · ${Number(data.hold_remaining_sec||0).toFixed(1)}초 후 자동 수납`;
+  else if(state==='RETRACTING')rampStatus.textContent=`자동 수납 중 · ${progress.toFixed(0)}%`;
+  else if(state==='ERROR')rampStatus.textContent='모터 오류: '+(data.error||'알 수 없음');
+  else if(data.last_completed_at)rampStatus.textContent='자동 전개/수납 완료 · 다음 판단 세션 대기';
+  else rampStatus.textContent=data.ready?'대기 중':'모터 초기화 대기';
+
+  updateDeployButton();
+}
+
+async function fetchRampStatus(){
+  try{const res=await fetch('/api/status',{cache:'no-store'}); if(res.ok)renderRampStatus(await res.json());}catch(e){}
+}
+
+async function sendRampCommand(action){
+  unlockAudio();
+  deployBtn.disabled=true; retractBtn.disabled=true;
+  rampProgress.classList.add('show');
+  rampStatus.textContent=action==='deploy'?'전개 요청 중...':'즉시 수납 요청 중...';
+  try{
+    const endpoint=action==='deploy'?'/api/deploy':'/api/retract';
+    const res=await fetch(endpoint,{method:'POST'}); const body=await res.json().catch(()=>({}));
+    if(!res.ok){rampStatus.textContent='요청 거부: '+(body.reason||res.status);}
+    await fetchRampStatus(); await fetchVision();
+  }catch(e){rampStatus.textContent='서버 연결 오류';}
+}
+
+
+
+setInterval(fetchVision,500);
+setInterval(fetchRampStatus,250);
+fetchSpeed();
+fetchVision();
+fetchRampStatus();
+</script>
+</body>
+</html>

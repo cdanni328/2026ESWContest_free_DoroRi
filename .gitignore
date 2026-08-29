@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors and local agent settings
+.vscode/
+.idea/
+.agents/
+.codex/
+
+# Runtime output
+records/
+runs/
+*.log
+
+# Local environment and OS files
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db

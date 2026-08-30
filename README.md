@@ -84,7 +84,7 @@ Raspberry Pi OS 계열에서 권장하는 설치 예시입니다.
 
 ```bash
 sudo apt update
-sudo apt install -y python3-venv python3-opencv python3-gpiozero python3-lgpio
+sudo apt install -y python3-venv python3-gpiozero python3-lgpio
 
 cd ~/2026ESWContest_free_DoroRi
 python3 -m venv --system-site-packages .venv
@@ -93,7 +93,42 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-`requirements.txt`에는 Flask, Ultralytics, python-OBD와 호환되는 NumPy/OpenCV 버전이 들어 있습니다. GPIO 패키지는 Raspberry Pi OS 패키지를 사용하도록 위에서 `apt`로 설치합니다.
+`requirements.txt`의 Ultralytics/OpenCV가 현재 Python에 맞는 NumPy를 함께 설치합니다. `numpy==1.24.4` 고정은 Python 3.12 이상과 호환되지 않으므로 사용하지 않습니다. GPIO 패키지는 Raspberry Pi OS 패키지를 사용하도록 위에서 `apt`로 설치합니다.
+
+### OBD 속도만 터미널에서 시험
+
+전체 서버용 패키지는 필요하지 않습니다. USB ELM327을 연결한 뒤 다음만 설치하고 실행합니다.
+
+```bash
+sudo apt update
+sudo apt install -y python3-venv
+
+cd ~/2026ESWContest_free_DoroRi
+python3 -m venv .venv-obd
+source .venv-obd/bin/activate
+python -m pip install obd==0.7.3
+python SW/test_obd_speed.py --port /dev/ttyUSB0
+```
+
+포트 이름을 모르면 먼저 확인합니다.
+
+```bash
+ls -l /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
+ls -l /dev/serial/by-id/ 2>/dev/null
+```
+
+권한 오류가 나면 사용자를 `dialout` 그룹에 추가한 뒤 재부팅합니다.
+
+```bash
+sudo usermod -aG dialout "$USER"
+sudo reboot
+```
+
+복제 ELM327의 응답이 불안정하면 fast 모드를 끄고 제한 시간을 늘립니다.
+
+```bash
+python SW/test_obd_speed.py --port /dev/ttyUSB0 --slow --timeout 5
+```
 
 ---
 

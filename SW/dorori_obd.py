@@ -43,6 +43,12 @@ except ImportError:
     YOLO = None  # type: ignore[assignment]
 
 try:
+    from dorori_stream import StreamHub, register_stream
+except ImportError:  # dorori_stream.py 가 없으면 스트림 없이 그대로 동작합니다.
+    StreamHub = None  # type: ignore[assignment]
+    register_stream = None  # type: ignore[assignment]
+
+try:
     import obd
 except ImportError:
     obd = None  # type: ignore[assignment]
@@ -796,6 +802,23 @@ def latest_frame_snapshot() -> tuple[Any | None, float]:
     return frame, updated_at
 
 
+def stream_speed_snapshot() -> tuple[float | None, bool]:
+    """스트림 오버레이에 표시할 (속도, 유효 여부)."""
+    vehicle = vehicle_snapshot()
+    speed = vehicle.get("speed_kmh")
+    return (None if speed is None else float(speed)), speed_is_fresh(vehicle)
+
+
+# /raw, /yolo 스트림. 카메라는 camera_loop 가 이미 열어 둔 것을 그대로 씁니다.
+stream_hub = (
+    StreamHub(get_frame=latest_frame_snapshot, get_speed=stream_speed_snapshot)
+    if StreamHub is not None
+    else None
+)
+if stream_hub is not None and register_stream is not None:
+    register_stream(app, stream_hub)
+
+
 def prediction_kwargs(imgsz: int) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "verbose": False,
@@ -943,23 +966,47 @@ def vision_loop() -> None:
             drainage_conf: float | None = None
             manhole_conf: float | None = None
 
+            # /yolo 스트림에 넘길 폴리곤/박스 목록
+            stream_detections: list[dict[str, Any]] = []
+            masks_xy = (
+                seg_result.masks.xy
+                if getattr(seg_result, "masks", None) is not None
+                else None
+            )
+
             if seg_result.boxes is not None:
-                for box in seg_result.boxes:
+                for box_index, box in enumerate(seg_result.boxes):
                     cls_id = int(box.cls[0])
                     confidence = float(box.conf[0]) if box.conf is not None else None
                     xyxy = [float(value) for value in box.xyxy[0].tolist()]
+                    polygon = (
+                        masks_xy[box_index]
+                        if masks_xy is not None and box_index < len(masks_xy)
+                        else None
+                    )
+                    kind = "etc"
 
                     if cls_id in curb_ids:
+                        kind = "curb"
                         curb_detected = True
                         curb_conf = max(curb_conf or 0.0, confidence or 0.0)
                         if box_center_in_zone(xyxy, frame_w, frame_h, REACH_ZONE):
                             curb_reachable = True
                     elif cls_id in drainage_ids:
+                        kind = "drain"
                         drainage_detected = True
                         drainage_conf = max(drainage_conf or 0.0, confidence or 0.0)
                     elif cls_id in manhole_ids:
+                        kind = "manhole"
                         manhole_detected = True
                         manhole_conf = max(manhole_conf or 0.0, confidence or 0.0)
+
+                    stream_detections.append({
+                        "kind": kind,
+                        "conf": confidence,
+                        "xyxy": xyxy,
+                        "polygon": polygon,
+                    })
 
             cls_result = classify_model.predict(
                 source=roi_frame,
@@ -1006,6 +1053,14 @@ def vision_loop() -> None:
                     "updated_at": now,
                     "error": None,
                 })
+
+            if stream_hub is not None:
+                stream_hub.publish_vision(
+                    roi_frame,
+                    stream_detections,
+                    decision=decision,
+                    surface_text=f"{surface_class} {surface_conf:.2f}",
+                )
 
             print(
                 f"[VISION] speed={float(speed):.1f} "

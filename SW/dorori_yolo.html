@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DORORI · YOLO 오버레이</title>
+<style>
+  :root{ --bg:#000; --text-dim:#7c8a9c; --danger:#ff5470; }
+  *{box-sizing:border-box;}
+  html,body{margin:0; height:100%; background:var(--bg); overflow:hidden;}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Pretendard,sans-serif;}
+
+  #stream{
+    width:100%; height:100%; display:block;
+    object-fit:contain;          /* cover 로 바꾸면 창을 꽉 채우고 위아래가 잘립니다 */
+    background:var(--bg);
+  }
+
+  .tag{
+    position:fixed; left:10px; bottom:8px; z-index:5;
+    color:var(--text-dim); font-size:11px; font-weight:600;
+    letter-spacing:.06em; text-transform:uppercase; pointer-events:none;
+  }
+  .tag.hidden{display:none;}   /* 촬영할 때 라벨 빼려면 h 키 */
+
+  .reconnect{
+    position:fixed; inset:0; z-index:10; display:none;
+    align-items:center; justify-content:center; flex-direction:column; gap:10px;
+    background:rgba(0,0,0,.85); color:var(--danger); font-size:14px;
+  }
+  .reconnect.show{display:flex;}
+  .reconnect small{color:var(--text-dim); font-size:12px;}
+</style>
+</head>
+<body>
+
+<img id="stream" src="/video/yolo" alt="카메라 원본 + YOLO + 속도">
+<div class="tag" id="tag">camera + yolo</div>
+
+<div class="reconnect" id="reconnect">
+  <div>스트림 연결이 끊겼습니다</div>
+  <small>자동으로 다시 연결하는 중...</small>
+</div>
+
+<script>
+/* MJPEG 스트림은 서버가 잠깐 멈추거나 와이파이가 끊기면 그대로 죽습니다.
+   촬영 도중 화면이 얼어붙지 않도록 끊기면 알아서 다시 붙입니다. */
+const SOURCE = '/video/yolo';
+const stream = document.getElementById('stream');
+const banner = document.getElementById('reconnect');
+let retryTimer = null;
+
+function reconnect(){
+  if(retryTimer) return;
+  banner.classList.add('show');
+  retryTimer = setTimeout(()=>{
+    retryTimer = null;
+    stream.src = SOURCE + '?t=' + Date.now();
+  }, 1000);
+}
+
+stream.addEventListener('error', reconnect);
+stream.addEventListener('load', ()=>banner.classList.remove('show'));
+
+/* 탭을 다시 활성화하면 브라우저가 스트림을 끊어놓는 경우가 있어 새로 붙입니다. */
+document.addEventListener('visibilitychange', ()=>{
+  if(!document.hidden) stream.src = SOURCE + '?t=' + Date.now();
+});
+
+/* h: 좌하단 라벨 숨기기 / r: 수동 재연결 */
+document.addEventListener('keydown', e=>{
+  if(e.key === 'h') document.getElementById('tag').classList.toggle('hidden');
+  if(e.key === 'r') stream.src = SOURCE + '?t=' + Date.now();
+});
+</script>
+</body>
+</html>

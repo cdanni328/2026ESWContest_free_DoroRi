@@ -30,15 +30,15 @@ Reporsitory of Team DoroRi for The World Embedded Software Contest 2026
 3. 속도가 `0.1 km/h` 이하가 되면 **정차 이후 새로 얻은 카메라 결과**를 기다립니다.
 4. 속도가 정차 기준 이하로 3초 연속 유지되고 결과가 `YELLOW`이면 모터 사이클을 한 번만 시작합니다.
 5. 기본 모터 사이클:
-   - 전개 방향 `1600` STEP 펄스
+   - 전개 방향 `2400` STEP 펄스(1.5회전, 540도)
    - 전개 상태 `5초` 유지
-   - 반대 방향 `1600` STEP 펄스로 수납
+   - 반대 방향 `2400` STEP 펄스(1.5회전, 540도)로 수납
 6. 속도가 다시 올라가거나, 비전/속도 오류가 생기거나, 시스템을 끄거나, `즉시 수납`을 누르면:
    - 유지 중이면 5초를 기다리지 않고 수납
    - 전개 도중이면 **실제로 전개된 펄스 수만큼만 즉시 역회전**
 7. 같은 판단 세션에서는 `deploy_latched`로 반복 전개를 막습니다.
 
-기본 `1600 pulse / 300 Hz`에서는 한 방향 회전에 약 `5.33초`가 걸립니다. 정상 전체 사이클은 약 `5.33 + 5 + 5.33 = 15.67초`입니다.
+기본 `2400 pulse / 300 Hz`에서는 한 방향 회전에 약 `8초`가 걸립니다. 정상 전체 사이클은 약 `8 + 5 + 8 = 21초`입니다.
 
 ### 판단 우선순위
 
@@ -153,9 +153,9 @@ python SW/test_obd_speed.py --port /dev/ttyUSB0 --slow --timeout 5
 - 6선 스테퍼 모터를 A4988에 연결할 때는 각 코일의 양 끝 4선만 사용하고 센터 탭 2선은 연결하지 않습니다.
 - A4988 전류 제한을 모터 정격에 맞게 먼저 설정하십시오.
 
-### 1600펄스가 실제 한 바퀴인지 확인
+### 2400펄스가 실제 1.5바퀴인지 확인
 
-`MOTOR_STEPS_PER_REV=1600`은 사용자가 제시한 기존 시험값을 그대로 사용한 것입니다. 실제 한 바퀴는 모터 기본 스텝각과 A4988의 MS1/MS2/MS3 마이크로스텝 설정에 따라 달라집니다. 기구를 연결하기 전에 무부하 상태에서 정확히 한 바퀴인지 확인하십시오.
+기존 시험값인 한 바퀴 `1600`펄스를 기준으로 `MOTOR_STEPS_PER_REV=2400`을 사용해 1.5바퀴(540도)를 구동합니다. 실제 회전각은 모터 기본 스텝각과 A4988의 MS1/MS2/MS3 마이크로스텝 설정에 따라 달라집니다. 기구를 연결하기 전에 무부하 상태에서 정확히 540도인지 확인하십시오.
 
 회전 방향이 반대이면 배선을 바꾸지 않고 다음처럼 실행할 수 있습니다.
 
@@ -257,7 +257,7 @@ OBD_FAST=0 OBD_TIMEOUT_SEC=1.0 OBD_PORT=/dev/ttyUSB0 python dorori_obd.py
 | `STEP_PIN` | `17` | BCM STEP GPIO |
 | `DIR_PIN` | `27` | BCM DIR GPIO |
 | `ENABLE_PIN` | `22` | BCM ENABLE GPIO, Active-Low |
-| `MOTOR_STEPS_PER_REV` | `1600` | 전개/수납 한 방향 펄스 수 |
+| `MOTOR_STEPS_PER_REV` | `2400` | 전개/수납 한 방향 펄스 수(1.5회전, 540도) |
 | `MOTOR_FREQUENCY_HZ` | `300` | STEP 펄스 주파수 |
 | `MOTOR_HOLD_SEC` | `5.0` | 전개 후 유지 시간 |
 | `MOTOR_DEPLOY_DIRECTION` | `1` | `1`/`0`으로 전개 방향 반전 |
@@ -282,7 +282,7 @@ OBD_FAST=0 OBD_TIMEOUT_SEC=1.0 OBD_PORT=/dev/ttyUSB0 python dorori_obd.py
 예시:
 
 ```bash
-MOTOR_STEPS_PER_REV=1600 \
+MOTOR_STEPS_PER_REV=2400 \
 MOTOR_FREQUENCY_HZ=300 \
 MOTOR_HOLD_SEC=5 \
 CAMERA_SOURCE=0 \

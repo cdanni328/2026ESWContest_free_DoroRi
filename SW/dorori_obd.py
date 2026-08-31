@@ -12,9 +12,9 @@ DORORI 프로젝트: 실제 카메라/YOLO/모터 + USB ELM327 OBD-II 속도 서
 
 모터 기본값:
 - BCM STEP=17, DIR=27, ENABLE=22
-- 전개/수납 펄스 수=2400 (1.5회전, 540도)
+- 전개/수납 펄스 수=250
 - STEP 주파수=300 Hz
-- 전개 1.5회전 -> 5초 유지 -> 반대 방향 1.5회전 자동 수납
+- 정방향 250 STEP 전개 -> 5초 유지 -> 역방향 250 STEP 자동 수납
 
 환경변수로 주요 설정을 바꿀 수 있습니다. 자세한 내용은 README_KO.md를 참고하세요.
 """
@@ -114,7 +114,7 @@ REACH_ZONE = (0.25, 0.55, 0.75, 0.95)
 STEP_PIN = int(os.environ.get("STEP_PIN", "17"))
 DIR_PIN = int(os.environ.get("DIR_PIN", "27"))
 ENABLE_PIN = int(os.environ.get("ENABLE_PIN", "22"))
-MOTOR_STEPS_PER_REV = int(os.environ.get("MOTOR_STEPS_PER_REV", "2400"))
+MOTOR_STEPS_PER_REV = int(os.environ.get("MOTOR_STEPS_PER_REV", "250"))
 MOTOR_FREQUENCY_HZ = float(os.environ.get("MOTOR_FREQUENCY_HZ", "300"))
 MOTOR_HOLD_SEC = float(os.environ.get("MOTOR_HOLD_SEC", "5.0"))
 MOTOR_DEPLOY_DIRECTION = env_bool("MOTOR_DEPLOY_DIRECTION", True)
@@ -682,7 +682,7 @@ class MotorController:
                     f"deployed_steps={deployed_steps}/{MOTOR_STEPS_PER_REV}"
                 )
 
-            # 정상 전개라면 1.5바퀴, 조기 중단이라면 실제 전개된 펄스 수만큼 역회전합니다.
+            # 정상 전개라면 250 STEP, 조기 중단이라면 실제 전개된 펄스 수만큼 역회전합니다.
             self._update_state(
                 state="RETRACTING",
                 progress=round(deployed_progress, 1),
@@ -1265,7 +1265,7 @@ def control_loop() -> None:
                         phase="AUTO_CYCLE_TRIGGERED",
                         deploy_latched=True,
                         last_motor_action="AUTO_CYCLE:auto_yellow_stop",
-                        reason_text="발판 1.5회전(540도) 전개 후 5초 유지, 자동 수납을 시작했습니다.",
+                        reason_text="발판 250 STEP 전개 후 5초 유지, 역방향 250 STEP 자동 수납을 시작했습니다.",
                     )
                 elif motor_reason not in {"motor_busy", "motor_thread_busy"}:
                     update_system(

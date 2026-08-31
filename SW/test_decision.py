@@ -45,7 +45,7 @@ def main() -> None:
         assert dorori_obd.decide(*arguments)[0] == expected, arguments
 
     assert dorori_obd.VISION_ROI == (0.0, 0.0, 1.0, 1.0)
-    assert dorori_obd.MOTOR_STEPS_PER_REV == 2400
+    assert dorori_obd.MOTOR_STEPS_PER_REV == 250
     assert dorori_obd.STOP_DEPLOY_DELAY_SEC == 3.0
     assert dorori_obd.stop_delay_remaining(None, 100.0) == 3.0
     assert 0.09 < dorori_obd.stop_delay_remaining(100.0, 102.9) < 0.11

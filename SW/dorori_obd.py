@@ -96,7 +96,7 @@ CAMERA_RETRY_SEC = float(os.environ.get("CAMERA_RETRY_SEC", "2.0"))
 
 CREEP_MAX_KMH = float(os.environ.get("CREEP_MAX_KMH", "5.0"))
 STOP_SPEED_EPSILON_KMH = float(os.environ.get("STOP_SPEED_EPSILON_KMH", "0.1"))
-STOP_DEPLOY_DELAY_SEC = float(os.environ.get("STOP_DEPLOY_DELAY_SEC", "1.0"))
+STOP_DEPLOY_DELAY_SEC = float(os.environ.get("STOP_DEPLOY_DELAY_SEC", "3.0"))
 CONTROL_PERIOD_SEC = float(os.environ.get("CONTROL_PERIOD_SEC", "0.05"))
 VISION_INTERVAL_SEC = float(os.environ.get("VISION_INTERVAL_SEC", "1.0"))
 VISION_STALE_SEC = float(os.environ.get("VISION_STALE_SEC", "5.0"))
@@ -316,6 +316,13 @@ def speed_is_fresh(vehicle: dict[str, Any] | None = None) -> bool:
     if updated_at <= 0.0:
         return False
     return (time.time() - updated_at) <= OBD_STALE_SEC
+
+
+def stop_delay_remaining(stopped_since: float | None, now: float | None = None) -> float:
+    if stopped_since is None:
+        return STOP_DEPLOY_DELAY_SEC
+    elapsed = (time.time() if now is None else now) - float(stopped_since)
+    return max(0.0, STOP_DEPLOY_DELAY_SEC - elapsed)
 
 
 def obd_loop() -> None:
@@ -1213,12 +1220,11 @@ def control_loop() -> None:
             shutdown_event.wait(CONTROL_PERIOD_SEC)
             continue
 
-        # 정차 + YELLOW
+        # 정차 + YELLOW. 전개 지연은 YELLOW 시작이 아니라 연속 정차 시작부터 계산합니다.
         yellow_since = system.get("yellow_since")
         if yellow_since is None:
             yellow_since = now
-        elapsed = now - float(yellow_since)
-        remaining = max(0.0, STOP_DEPLOY_DELAY_SEC - elapsed)
+        remaining = stop_delay_remaining(stopped_since, now)
 
         if motor_state["busy"]:
             phase = f"MOTOR_{motor_state['state']}"
@@ -1229,9 +1235,9 @@ def control_loop() -> None:
         else:
             phase = "STOPPED_YELLOW_DELAY" if remaining > 0 else "STOPPED_YELLOW_READY"
             reason = (
-                f"정차 + YELLOW 유지: {remaining:.2f}초 후 발판 자동 전개"
+                f"정차 유지 중: {remaining:.2f}초 후 발판 자동 전개"
                 if remaining > 0
-                else "정차 + YELLOW 조건 충족: 발판 자동 전개 준비"
+                else f"{STOP_DEPLOY_DELAY_SEC:g}초 연속 정차 + YELLOW 조건 충족: 발판 자동 전개 준비"
             )
 
         update_system(
@@ -1243,7 +1249,7 @@ def control_loop() -> None:
             yellow_since=yellow_since,
         )
 
-        if elapsed >= STOP_DEPLOY_DELAY_SEC and not system.get("deploy_latched"):
+        if remaining <= 0.0 and not system.get("deploy_latched"):
             if not motor_state["ready"]:
                 update_system(
                     phase="MOTOR_FAULT",
@@ -1406,6 +1412,13 @@ def deploy_manual():
         return jsonify({"ok": False, "reason": "vision_not_fresh"}), 409
     if system.get("stopped_since") is None or float(perception["updated_at"]) < float(system["stopped_since"]):
         return jsonify({"ok": False, "reason": "post_stop_vision_not_ready"}), 409
+    remaining = stop_delay_remaining(system.get("stopped_since"))
+    if remaining > 0.0:
+        return jsonify({
+            "ok": False,
+            "reason": "stop_delay_not_elapsed",
+            "remaining_sec": round(remaining, 3),
+        }), 409
     if system["final_decision"] != "YELLOW":
         return jsonify({
             "ok": False,

@@ -28,7 +28,7 @@ Reporsitory of Team DoroRi for The World Embedded Software Contest 2026
 1. 속도가 `5.0 km/h`를 초과하면 카메라 판단과 전개를 대기합니다.
 2. `0.1 < 속도 <= 5.0 km/h`에서는 카메라 판단 결과만 표시하며 모터를 전개하지 않습니다.
 3. 속도가 `0.1 km/h` 이하가 되면 **정차 이후 새로 얻은 카메라 결과**를 기다립니다.
-4. 정차 후 결과가 `YELLOW`로 1초 유지되면 모터 사이클을 한 번만 시작합니다.
+4. 속도가 정차 기준 이하로 3초 연속 유지되고 결과가 `YELLOW`이면 모터 사이클을 한 번만 시작합니다.
 5. 기본 모터 사이클:
    - 전개 방향 `1600` STEP 펄스
    - 전개 상태 `5초` 유지
@@ -265,7 +265,7 @@ OBD_FAST=0 OBD_TIMEOUT_SEC=1.0 OBD_PORT=/dev/ttyUSB0 python dorori_obd.py
 | `MOTOR_DRY_RUN` | `0` | `1`이면 GPIO 없이 시뮬레이션 |
 | `CREEP_MAX_KMH` | `5.0` | 판단을 수행하는 최대 저속 |
 | `STOP_SPEED_EPSILON_KMH` | `0.1` | 정차로 간주하는 속도 상한 |
-| `STOP_DEPLOY_DELAY_SEC` | `1.0` | 정차+YELLOW 후 전개 지연 |
+| `STOP_DEPLOY_DELAY_SEC` | `3.0` | 연속 정차 후 전개 지연 |
 | `VISION_INTERVAL_SEC` | `1.0` | 비전 추론 주기 |
 | `VISION_STALE_SEC` | `5.0` | 비전 결과 유효 시간 |
 | `CAMERA_SOURCE` | `0` | OpenCV 카메라 번호 또는 스트림 경로 |

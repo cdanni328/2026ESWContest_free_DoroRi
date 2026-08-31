@@ -445,7 +445,7 @@ retractBtn.addEventListener('click',()=>sendRampCommand('retract'));
 function canDeployNow(){
   if(!lastVision||!latestMotor)return false;
   const stopped=lastVision.speed_kmh!==null&&lastVision.speed_kmh!==undefined&&Number(lastVision.speed_kmh)<=0.1;
-  return Boolean(lastVision.active&&lastVision.final_decision==='YELLOW'&&stopped&&
+  return Boolean(lastVision.active&&lastVision.final_decision==='YELLOW'&&stopped&&lastVision.phase!=='STOPPED_YELLOW_DELAY'&&
     !lastVision.deploy_latched&&latestMotor.ready&&!latestMotor.busy&&latestMotor.state==='IDLE');
 }
 function updateDeployButton(){

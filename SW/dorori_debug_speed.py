@@ -14,7 +14,7 @@ DORORI 프로젝트: 실제 카메라/YOLO/모터 + 수동 속도 입력 디버�
 - BCM STEP=17, DIR=27, ENABLE=22
 - 전개/수납 펄스 수=250
 - STEP 주파수=300 Hz
-- 정방향 250 STEP 전개 -> 5초 유지 -> 역방향 250 STEP 자동 수납
+- 단계별 음성 종료 확인 -> 전개 -> 유지 -> 회수 (정차부터 회수까지 최대 10초)
 
 환경변수로 주요 설정을 바꿀 수 있습니다. 자세한 내용은 README_KO.md를 참고하세요.
 """
@@ -86,7 +86,7 @@ CAMERA_RETRY_SEC = float(os.environ.get("CAMERA_RETRY_SEC", "2.0"))
 
 CREEP_MAX_KMH = float(os.environ.get("CREEP_MAX_KMH", "5.0"))
 STOP_SPEED_EPSILON_KMH = float(os.environ.get("STOP_SPEED_EPSILON_KMH", "0.1"))
-STOP_DEPLOY_DELAY_SEC = float(os.environ.get("STOP_DEPLOY_DELAY_SEC", "3.0"))
+STOP_DEPLOY_DELAY_SEC = float(os.environ.get("STOP_DEPLOY_DELAY_SEC", "0.1"))
 CONTROL_PERIOD_SEC = float(os.environ.get("CONTROL_PERIOD_SEC", "0.05"))
 VISION_INTERVAL_SEC = float(os.environ.get("VISION_INTERVAL_SEC", "1.0"))
 VISION_STALE_SEC = float(os.environ.get("VISION_STALE_SEC", "5.0"))
@@ -110,6 +110,14 @@ MOTOR_HOLD_SEC = float(os.environ.get("MOTOR_HOLD_SEC", "5.0"))
 MOTOR_DEPLOY_DIRECTION = env_bool("MOTOR_DEPLOY_DIRECTION", True)
 MOTOR_HOLD_TORQUE = env_bool("MOTOR_HOLD_TORQUE", True)
 MOTOR_DRY_RUN = env_bool("MOTOR_DRY_RUN", False)
+CYCLE_MAX_SEC = float(os.environ.get("CYCLE_MAX_SEC", "10.0"))
+MOTOR_MOVE_BUFFER_SEC = 0.05
+ANNOUNCEMENT_RESERVE_SEC = {
+    "DEPLOY": 2.25,
+    "DEPLOYED": 0.95,
+    "RETRACT": 1.24,
+    "RETRACTED": 0.86,
+}
 
 
 
@@ -314,12 +322,25 @@ def perception_is_fresh(perception: dict[str, Any] | None = None) -> bool:
 
 # ───────────────────────────── 모터 제어 ─────────────────────────────
 class MotorController:
-    BUSY_STATES = {"STARTING", "DEPLOYING", "DEPLOYED_HOLD", "RETRACTING"}
+    ANNOUNCEMENT_STATES = {
+        "ANNOUNCING_DEPLOY",
+        "ANNOUNCING_DEPLOYED",
+        "ANNOUNCING_RETRACT",
+        "ANNOUNCING_RETRACTED",
+    }
+    BUSY_STATES = ANNOUNCEMENT_STATES | {
+        "STARTING",
+        "DEPLOYING",
+        "DEPLOYED_HOLD",
+        "RETRACTING",
+    }
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._early_retract = threading.Event()
+        self._announcement_event = threading.Event()
+        self._announcement_result: str | None = None
         self._cycle_id = 0
         self._step_pin: Any = None
         self._dir_pin: Any = None
@@ -334,6 +355,10 @@ class MotorController:
             "hold_until": None,
             "source": None,
             "cycle_id": 0,
+            "announcement": None,
+            "cycle_started_at": None,
+            "cycle_deadline_at": None,
+            "retracted_at": None,
             "error": None,
             "last_completed_at": None,
             "updated_at": time.time(),
@@ -350,7 +375,9 @@ class MotorController:
         if MOTOR_HOLD_SEC < 0:
             self._set_error("MOTOR_HOLD_SEC는 0 이상이어야 합니다.")
             return
-
+        if CYCLE_MAX_SEC <= STOP_DEPLOY_DELAY_SEC:
+            self._set_error("CYCLE_MAX_SEC는 STOP_DEPLOY_DELAY_SEC보다 커야 합니다.")
+            return
         if MOTOR_DRY_RUN:
             with self._lock:
                 self._state.update({
@@ -398,6 +425,7 @@ class MotorController:
             self._state.update({
                 "ready": False,
                 "state": "ERROR",
+                "announcement": None,
                 "error": message,
                 "updated_at": time.time(),
             })
@@ -419,10 +447,18 @@ class MotorController:
             data["hold_remaining_sec"] = None
 
         data["busy"] = data.get("state") in self.BUSY_STATES
+        deadline_at = data.get("cycle_deadline_at")
+        data["cycle_remaining_sec"] = (
+            round(max(0.0, float(deadline_at) - time.time()), 2)
+            if data["busy"] and deadline_at
+            else None
+        )
         data.pop("hold_until", None)
         return data
 
-    def request_cycle(self, source: str) -> tuple[bool, str]:
+    def request_cycle(
+        self, source: str, stopped_since: float | None = None
+    ) -> tuple[bool, str]:
         with self._lock:
             if not self._state["ready"]:
                 return False, self._state.get("error") or "motor_not_ready"
@@ -433,18 +469,29 @@ class MotorController:
 
             self._cycle_id += 1
             cycle_id = self._cycle_id
+            now = time.time()
+            cycle_started_at = max(stopped_since or now, now - STOP_DEPLOY_DELAY_SEC)
+            cycle_deadline_at = cycle_started_at + CYCLE_MAX_SEC
+            if cycle_deadline_at <= now:
+                return False, "cycle_deadline_expired"
             self._early_retract.clear()
+            self._announcement_event.clear()
+            self._announcement_result = None
             self._state.update({
                 "state": "STARTING",
                 "progress": 0,
                 "source": source,
                 "cycle_id": cycle_id,
+                "announcement": None,
+                "cycle_started_at": cycle_started_at,
+                "cycle_deadline_at": cycle_deadline_at,
+                "retracted_at": None,
                 "error": None,
                 "updated_at": time.time(),
             })
             self._thread = threading.Thread(
                 target=self._cycle_worker,
-                args=(cycle_id, source),
+                args=(cycle_id, source, cycle_deadline_at),
                 name=f"motor-cycle-{cycle_id}",
                 daemon=True,
             )
@@ -454,12 +501,59 @@ class MotorController:
 
     def request_retract_now(self) -> tuple[bool, str]:
         state = self.snapshot()["state"]
-        if state in {"STARTING", "DEPLOYING", "DEPLOYED_HOLD"}:
+        if state in {
+            "STARTING",
+            "ANNOUNCING_DEPLOY",
+            "DEPLOYING",
+            "ANNOUNCING_DEPLOYED",
+            "DEPLOYED_HOLD",
+        }:
             self._early_retract.set()
             return True, "early_retract_requested"
-        if state == "RETRACTING":
+        if state in {"ANNOUNCING_RETRACT", "RETRACTING", "ANNOUNCING_RETRACTED"}:
             return True, "already_retracting"
         return False, "ramp_not_deployed_or_moving"
+
+    def finish_announcement(
+        self, cycle_id: int, announcement: str, completed: bool
+    ) -> tuple[bool, str]:
+        with self._lock:
+            if cycle_id != self._state["cycle_id"]:
+                return False, "stale_cycle"
+            if announcement != self._state.get("announcement"):
+                return False, "unexpected_announcement"
+            self._announcement_result = "completed" if completed else "failed"
+            self._announcement_event.set()
+        if not completed:
+            self._early_retract.set()
+        return True, "announcement_recorded"
+
+    def _await_announcement(
+        self,
+        state: str,
+        announcement: str,
+        cycle_id: int,
+        deadline_at: float,
+        *,
+        cancel_on_retract: bool,
+    ) -> bool:
+        with self._lock:
+            self._announcement_result = None
+            self._announcement_event.clear()
+            self._state.update({
+                "state": state,
+                "announcement": announcement,
+                "cycle_id": cycle_id,
+                "updated_at": time.time(),
+            })
+
+        while time.time() < deadline_at and not shutdown_event.is_set():
+            if cancel_on_retract and self._early_retract.is_set():
+                return False
+            if self._announcement_event.wait(timeout=0.05):
+                with self._lock:
+                    return self._announcement_result == "completed"
+        return False
 
     def _set_driver_enabled(self, enabled: bool) -> None:
         if MOTOR_DRY_RUN:
@@ -525,11 +619,43 @@ class MotorController:
 
         return steps, False
 
-    def _cycle_worker(self, cycle_id: int, source: str) -> None:
+    def _cycle_worker(self, cycle_id: int, source: str, deadline_at: float) -> None:
         try:
+            if not self._await_announcement(
+                "ANNOUNCING_DEPLOY",
+                "DEPLOY",
+                cycle_id,
+                deadline_at,
+                cancel_on_retract=True,
+            ):
+                self._update_state(
+                    state="IDLE",
+                    progress=0,
+                    announcement=None,
+                    hold_until=None,
+                )
+                print(f"[MOTOR] 전개 안내 미완료로 사이클 취소: cycle={cycle_id}")
+                return
+
+            move_sec = MOTOR_STEPS_PER_REV / MOTOR_FREQUENCY_HZ + MOTOR_MOVE_BUFFER_SEC
+            remaining_speech_sec = sum(
+                ANNOUNCEMENT_RESERVE_SEC[name]
+                for name in ("DEPLOYED", "RETRACT", "RETRACTED")
+            )
+            if time.time() + (2 * move_sec) + remaining_speech_sec > deadline_at:
+                self._update_state(
+                    state="IDLE",
+                    progress=0,
+                    announcement=None,
+                    hold_until=None,
+                )
+                print(f"[MOTOR] 10초 내 완료 시간 부족으로 사이클 취소: cycle={cycle_id}")
+                return
+
             self._update_state(
                 state="DEPLOYING",
                 progress=0,
+                announcement=None,
                 source=source,
                 cycle_id=cycle_id,
                 hold_until=None,
@@ -552,6 +678,7 @@ class MotorController:
                 self._update_state(
                     state="IDLE",
                     progress=0,
+                    announcement=None,
                     hold_until=None,
                     last_completed_at=time.time(),
                 )
@@ -559,32 +686,71 @@ class MotorController:
                 return
 
             if not interrupted:
-                hold_until = time.time() + MOTOR_HOLD_SEC
-                self._update_state(
-                    state="DEPLOYED_HOLD",
-                    progress=100,
-                    hold_until=hold_until,
+                retract_move_sec = (
+                    deployed_steps / MOTOR_FREQUENCY_HZ + MOTOR_MOVE_BUFFER_SEC
                 )
+                announced = self._await_announcement(
+                    "ANNOUNCING_DEPLOYED",
+                    "DEPLOYED",
+                    cycle_id,
+                    deadline_at
+                    - ANNOUNCEMENT_RESERVE_SEC["RETRACT"]
+                    - retract_move_sec
+                    - ANNOUNCEMENT_RESERVE_SEC["RETRACTED"],
+                    cancel_on_retract=True,
+                )
+                if announced:
+                    hold_sec = min(
+                        MOTOR_HOLD_SEC,
+                        max(
+                            0.0,
+                            deadline_at
+                            - time.time()
+                            - ANNOUNCEMENT_RESERVE_SEC["RETRACT"]
+                            - retract_move_sec
+                            - ANNOUNCEMENT_RESERVE_SEC["RETRACTED"],
+                        ),
+                    )
+                    hold_until = time.time() + hold_sec
+                    self._update_state(
+                        state="DEPLOYED_HOLD",
+                        progress=100,
+                        announcement=None,
+                        hold_until=hold_until,
+                    )
 
-                if not MOTOR_HOLD_TORQUE:
-                    self._set_driver_enabled(False)
+                    if not MOTOR_HOLD_TORQUE:
+                        self._set_driver_enabled(False)
 
-                # 설정된 유지 시간이 지나거나 /api/retract가 호출될 때까지 대기
-                self._early_retract.wait(timeout=MOTOR_HOLD_SEC)
+                    self._early_retract.wait(timeout=hold_sec)
 
-                if not MOTOR_HOLD_TORQUE:
-                    self._set_driver_enabled(True)
-                    time.sleep(0.01)
+                    if not MOTOR_HOLD_TORQUE:
+                        self._set_driver_enabled(True)
+                        time.sleep(0.01)
             else:
                 print(
                     f"[MOTOR] 전개 중 조기 수납: cycle={cycle_id}, "
                     f"deployed_steps={deployed_steps}/{MOTOR_STEPS_PER_REV}"
                 )
 
-            # 정상 전개라면 250 STEP, 조기 중단이라면 실제 전개된 펄스 수만큼 역회전합니다.
+            self._await_announcement(
+                "ANNOUNCING_RETRACT",
+                "RETRACT",
+                cycle_id,
+                deadline_at
+                - ANNOUNCEMENT_RESERVE_SEC["RETRACTED"]
+                - (
+                    deployed_steps / MOTOR_FREQUENCY_HZ
+                    + MOTOR_MOVE_BUFFER_SEC
+                ),
+                cancel_on_retract=False,
+            )
+
+            # 정상 전개라면 전체 STEP, 조기 중단이라면 실제 전개된 펄스 수만큼 역회전합니다.
             self._update_state(
                 state="RETRACTING",
                 progress=round(deployed_progress, 1),
+                announcement=None,
                 hold_until=None,
             )
             self._rotate_enabled(
@@ -595,13 +761,29 @@ class MotorController:
                 steps=deployed_steps,
             )
 
+            retracted_at = time.time()
+            self._set_driver_enabled(False)
+            self._update_state(retracted_at=retracted_at)
+            self._await_announcement(
+                "ANNOUNCING_RETRACTED",
+                "RETRACTED",
+                cycle_id,
+                deadline_at,
+                cancel_on_retract=False,
+            )
+
             self._update_state(
                 state="IDLE",
                 progress=0,
+                announcement=None,
                 hold_until=None,
                 last_completed_at=time.time(),
             )
-            print(f"[MOTOR] 자동 전개/수납 완료: cycle={cycle_id}, source={source}")
+            elapsed = retracted_at - (deadline_at - CYCLE_MAX_SEC)
+            print(
+                f"[MOTOR] 자동 전개/수납 완료: cycle={cycle_id}, source={source}, "
+                f"stop_to_retracted={elapsed:.2f}s"
+            )
 
         except Exception as exc:
             self._set_error(f"모터 사이클 실패: {exc}")
@@ -1109,13 +1291,13 @@ def control_loop() -> None:
                     yellow_since=None,
                 )
             else:
-                ok, motor_reason = motor.request_cycle("auto_yellow_stop")
+                ok, motor_reason = motor.request_cycle("auto_yellow_stop", stopped_since)
                 if ok:
                     update_system(
                         phase="AUTO_CYCLE_TRIGGERED",
                         deploy_latched=True,
                         last_motor_action="AUTO_CYCLE:auto_yellow_stop",
-                        reason_text="발판 250 STEP 전개 후 5초 유지, 역방향 250 STEP 자동 수납을 시작했습니다.",
+                        reason_text="음성 안내와 분리된 발판 자동 전개·유지·회수 사이클을 시작했습니다.",
                     )
                 elif motor_reason not in {"motor_busy", "motor_thread_busy"}:
                     update_system(
@@ -1150,7 +1332,7 @@ def start_assessment():
 
 @app.route("/api/stop", methods=["POST"])
 def stop_assessment():
-    # 시스템을 끄면 남은 5초 대기를 건너뛰고 가능한 즉시 수납 단계로 이동합니다.
+    # 시스템을 끄면 남은 유지 시간을 건너뛰고 조기 회수 단계로 이동합니다.
     motor.request_retract_now()
     update_system(
         active=False,
@@ -1264,6 +1446,22 @@ def get_ramp_status():
     return jsonify(motor.snapshot())
 
 
+@app.route("/api/announcement", methods=["POST"])
+def finish_motor_announcement():
+    payload = request.get_json(silent=True) or {}
+    if type(payload.get("cycle_id")) is not int:
+        return jsonify({"ok": False, "reason": "invalid_cycle_id"}), 400
+    if not isinstance(payload.get("announcement"), str):
+        return jsonify({"ok": False, "reason": "invalid_announcement"}), 400
+    if not isinstance(payload.get("completed"), bool):
+        return jsonify({"ok": False, "reason": "invalid_completed"}), 400
+
+    ok, reason = motor.finish_announcement(
+        payload["cycle_id"], payload["announcement"], payload["completed"]
+    )
+    return jsonify({"ok": ok, "reason": reason}), 200 if ok else 409
+
+
 @app.route("/api/deploy", methods=["POST"])
 def deploy_manual():
     system = system_snapshot()
@@ -1300,7 +1498,7 @@ def deploy_manual():
     if system.get("deploy_latched"):
         return jsonify({"ok": False, "reason": "cycle_already_triggered_this_session"}), 409
 
-    ok, reason = motor.request_cycle("manual_api")
+    ok, reason = motor.request_cycle("manual_api", system.get("stopped_since"))
     if not ok:
         return jsonify({"ok": False, "reason": reason}), 409
 
@@ -1320,7 +1518,7 @@ def retract_early():
         return jsonify({"ok": False, "reason": reason}), 409
     update_system(
         last_motor_action="EARLY_RETRACT:manual_api",
-        reason_text="즉시 수납 요청을 전달했습니다.",
+        reason_text="조기 회수 요청을 전달했습니다.",
     )
     return jsonify({"ok": True, "reason": reason})
 
@@ -1343,6 +1541,11 @@ def health():
 @app.route("/")
 def index():
     return send_from_directory(str(BASE_DIR), HTML_FILE_NAME)
+
+
+@app.route("/audio/<path:filename>")
+def announcement_audio(filename: str):
+    return send_from_directory(str(BASE_DIR / "audio"), filename)
 
 
 def shutdown() -> None:

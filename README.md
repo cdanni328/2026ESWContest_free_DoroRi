@@ -28,17 +28,24 @@ Reporsitory of Team DoroRi for The World Embedded Software Contest 2026
 1. 속도가 `5.0 km/h`를 초과하면 카메라 판단과 전개를 대기합니다.
 2. `0.1 < 속도 <= 5.0 km/h`에서는 카메라 판단 결과만 표시하며 모터를 전개하지 않습니다.
 3. 속도가 `0.1 km/h` 이하가 되면 **정차 이후 새로 얻은 카메라 결과**를 기다립니다.
-4. 속도가 정차 기준 이하로 3초 연속 유지되고 결과가 `YELLOW`이면 모터 사이클을 한 번만 시작합니다.
-5. 기본 모터 사이클:
-   - 정방향 `250` STEP 펄스로 전개
-   - 전개 상태 `5초` 유지
-   - 역방향 `250` STEP 펄스로 수납
-6. 속도가 다시 올라가거나, 비전/속도 오류가 생기거나, 시스템을 끄거나, `즉시 수납`을 누르면:
-   - 유지 중이면 5초를 기다리지 않고 수납
-   - 전개 도중이면 **실제로 전개된 펄스 수만큼만 즉시 역회전**
+4. 속도가 정차 기준 이하로 0.1초 연속 유지되고 결과가 `YELLOW`이면 모터 사이클을 한 번만 시작합니다.
+5. 음성과 물리 동작을 다음 순서로 분리합니다.
+   - `연석 감지, 발판 전개합니다` 안내 완료
+   - 발판 전개
+   - `전개 완료` 안내 완료
+   - 발판 유지
+   - `발판 회수합니다` 안내 완료
+   - 발판 회수
+   - `회수 완료` 안내
+   - `ko-KR-SunHiNeural` 여성 음성으로 생성한 고정 MP3를 사용하며 OS·브라우저 TTS 음성에 의존하지 않습니다.
+   - 브라우저가 각 MP3의 실제 재생 종료를 서버에 확인해 준 뒤에만 다음 동작을 시작합니다.
+   - 정차 시점부터 회수 완료 안내까지 10초를 넘지 않도록 유지 시간을 자동 단축합니다.
+6. 속도가 다시 올라가거나, 비전/속도 오류가 생기거나, 시스템을 끄거나, `조기 회수`를 누르면:
+   - 유지 중이면 남은 유지 시간을 기다리지 않고 수납
+   - 전개 도중이면 회수 안내 후 **실제로 전개된 펄스 수만큼만 역회전**
 7. 같은 판단 세션에서는 `deploy_latched`로 반복 전개를 막습니다.
 
-기본 `250 pulse / 300 Hz`에서는 한 방향 이동에 약 `0.83초`가 걸립니다. 정상 전체 사이클은 약 `0.83 + 5 + 0.83 = 6.67초`입니다.
+음성 재생 시간과 모터 속도에 따라 실제 유지 시간은 달라집니다. 유지 시간은 `MOTOR_HOLD_SEC`가 상한이며, 10초 제한에 필요한 회수 안내·회수 시간을 먼저 확보합니다.
 
 ### 판단 우선순위
 
@@ -63,6 +70,11 @@ Reporsitory of Team DoroRi for The World Embedded Software Contest 2026
 ├── dorori_debug_speed.html
 ├── dorori_obd.py
 ├── dorori_obd.html
+├── audio/
+│   ├── announce_deploy.mp3
+│   ├── announce_deployed.mp3
+│   ├── announce_retract.mp3
+│   └── announce_retracted.mp3
 ├── best_selection.pt
 ├── best노면.pt
 ├── requirements.txt
@@ -175,7 +187,7 @@ source .venv/bin/activate
 MOTOR_DRY_RUN=1 python dorori_debug_speed.py
 ```
 
-`MOTOR_DRY_RUN=1`에서는 실제 GPIO를 건드리지 않지만, 설정한 펄스 시간과 5초 유지 시간을 실제로 진행하며 화면 상태를 확인할 수 있습니다.
+`MOTOR_DRY_RUN=1`에서는 실제 GPIO를 건드리지 않지만, 설정한 펄스 시간과 동적으로 계산된 유지 시간을 실제로 진행하며 화면 상태를 확인할 수 있습니다.
 
 ### 5-2. 실제 모터 연결 후 실행
 
@@ -257,15 +269,16 @@ OBD_FAST=0 OBD_TIMEOUT_SEC=1.0 OBD_PORT=/dev/ttyUSB0 python dorori_obd.py
 | `STEP_PIN` | `17` | BCM STEP GPIO |
 | `DIR_PIN` | `27` | BCM DIR GPIO |
 | `ENABLE_PIN` | `22` | BCM ENABLE GPIO, Active-Low |
-| `MOTOR_STEPS_PER_REV` | `250` | 전개/수납 한 방향 펄스 수 |
-| `MOTOR_FREQUENCY_HZ` | `300` | STEP 펄스 주파수 |
-| `MOTOR_HOLD_SEC` | `5.0` | 전개 후 유지 시간 |
+| `MOTOR_STEPS_PER_REV` | 디버그 `250`, OBD `220` | 전개/회수 한 방향 펄스 수 |
+| `MOTOR_FREQUENCY_HZ` | 디버그 `300`, OBD `100` | STEP 펄스 주파수 |
+| `MOTOR_HOLD_SEC` | 디버그 `5.0`, OBD `3.0` | 전개 후 유지 시간 상한 |
 | `MOTOR_DEPLOY_DIRECTION` | `1` | `1`/`0`으로 전개 방향 반전 |
 | `MOTOR_HOLD_TORQUE` | `1` | 유지 중 ENABLE 유지 여부 |
 | `MOTOR_DRY_RUN` | `0` | `1`이면 GPIO 없이 시뮬레이션 |
 | `CREEP_MAX_KMH` | `5.0` | 판단을 수행하는 최대 저속 |
 | `STOP_SPEED_EPSILON_KMH` | `0.1` | 정차로 간주하는 속도 상한 |
-| `STOP_DEPLOY_DELAY_SEC` | `3.0` | 연속 정차 후 전개 지연 |
+| `STOP_DEPLOY_DELAY_SEC` | `0.1` | 연속 정차 후 전개 지연 |
+| `CYCLE_MAX_SEC` | `10.0` | 정차부터 회수 완료 안내까지의 제한 |
 | `VISION_INTERVAL_SEC` | `1.0` | 비전 추론 주기 |
 | `VISION_STALE_SEC` | `5.0` | 비전 결과 유효 시간 |
 | `CAMERA_SOURCE` | `0` | OpenCV 카메라 번호 또는 스트림 경로 |
@@ -291,7 +304,7 @@ python dorori_obd.py
 
 ### 유지 토크 설정
 
-기본값 `MOTOR_HOLD_TORQUE=1`은 발판을 5초간 유지하는 동안 A4988을 계속 활성화하여 정지 토크를 유지합니다. 그만큼 모터와 드라이버가 더 뜨거워질 수 있습니다. 기구가 자체 잠금 또는 기계식 지지 구조로 위치를 유지한다면 다음처럼 유지 중 출력을 끌 수 있습니다.
+기본값 `MOTOR_HOLD_TORQUE=1`은 발판 유지 단계에서 A4988을 계속 활성화하여 정지 토크를 유지합니다. 그만큼 모터와 드라이버가 더 뜨거워질 수 있습니다. 기구가 자체 잠금 또는 기계식 지지 구조로 위치를 유지한다면 다음처럼 유지 중 출력을 끌 수 있습니다.
 
 ```bash
 MOTOR_HOLD_TORQUE=0 python dorori_obd.py
@@ -306,12 +319,13 @@ MOTOR_HOLD_TORQUE=0 python dorori_obd.py
 공통:
 
 - `POST /api/start`: 판단 활성화
-- `POST /api/stop`: 판단 종료 및 가능한 즉시 수납 요청
+- `POST /api/stop`: 판단 종료 및 조기 회수 요청
 - `GET /api/vision`: UI용 통합 판단/속도/모터 상태
 - `GET /api/status`: 모터 상태
 - `GET /api/system`: 전체 내부 상태
 - `POST /api/deploy`: 정차·최신 YELLOW·미실행 조건을 모두 통과할 때만 수동 사이클 시작
 - `POST /api/retract`: 전개/유지 중 조기 수납
+- `POST /api/announcement`: UI가 모터 단계별 음성 종료 여부 전달
 - `GET /api/health`: 카메라·모델·모터 준비 상태
 
 디버그 버전만:

@@ -226,8 +226,8 @@
 
       <div class="ramp-section" id="rampSection">
         <div class="ramp-title">발판 제어 · 자동 복귀</div>
-        <button class="ramp-btn inactive" id="deployBtn" disabled>발판 전개 · 5초 후 자동 수납</button>
-        <button class="ramp-btn retract" id="retractBtn" style="display:none;">즉시 수납</button>
+        <button class="ramp-btn inactive" id="deployBtn" disabled>발판 전개 · 10초 내 자동 회수</button>
+        <button class="ramp-btn retract" id="retractBtn" style="display:none;">조기 회수</button>
         <div class="ramp-progress" id="rampProgress"><div class="ramp-progress-fill" id="rampProgressFill"></div></div>
         <div class="ramp-status" id="rampStatus">대기 중</div>
       </div>
@@ -250,23 +250,30 @@ const sourceBadge = document.getElementById('sourceBadge');
 let isOn = false;
 let lastVision = null;
 let latestMotor = null;
-let previousMotorState = null;
 
-/* ===== 소리: 경고음 + 한국어 TTS ===== */
+/* ===== 소리: 경고음 + 고정 한국어 여성 안내 음성 ===== */
 let audioCtx = null;
 let warnTimer = null;
-let koVoice = null;
+let activeAnnouncement = null;
+let lastFinishedAnnouncementKey = null;
 const BEEP_INTERVAL_MS = 1200;
+const ANNOUNCEMENT_AUDIO = {
+  DEPLOY:new Audio('/audio/announce_deploy.mp3'),
+  DEPLOYED:new Audio('/audio/announce_deployed.mp3'),
+  RETRACT:new Audio('/audio/announce_retract.mp3'),
+  RETRACTED:new Audio('/audio/announce_retracted.mp3')
+};
+Object.values(ANNOUNCEMENT_AUDIO).forEach(clip=>clip.preload='auto');
+const ANNOUNCEMENT_STATE = {
+  DEPLOY:'ANNOUNCING_DEPLOY',DEPLOYED:'ANNOUNCING_DEPLOYED',
+  RETRACT:'ANNOUNCING_RETRACT',RETRACTED:'ANNOUNCING_RETRACTED'
+};
 
 function unlockAudio(){
   if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if(audioCtx.state === 'suspended') audioCtx.resume();
-  soundBadge.textContent = '소리: 켜짐';
-  try{
-    const warm = new SpeechSynthesisUtterance(' ');
-    warm.volume = 0;
-    speechSynthesis.speak(warm);
-  }catch(e){}
+  soundBadge.textContent = '소리: 켜짐 · 한국어 여성 음성';
+  Object.values(ANNOUNCEMENT_AUDIO).forEach(clip=>clip.load());
 }
 function tone(freq,startAt,dur,gain=0.15){
   if(!audioCtx) return;
@@ -281,27 +288,38 @@ function tone(freq,startAt,dur,gain=0.15){
 function warnBeep(){if(!audioCtx)return; const t=audioCtx.currentTime; tone(880,t,.14); tone(660,t+.17,.18);}
 function startWarn(){if(warnTimer)return; warnBeep(); warnTimer=setInterval(warnBeep,BEEP_INTERVAL_MS);}
 function stopWarn(){if(warnTimer)clearInterval(warnTimer); warnTimer=null;}
-function pickVoice(){
-  if(!window.speechSynthesis)return;
-  const voices=speechSynthesis.getVoices();
-  koVoice=voices.find(v=>v.lang&&v.lang.toLowerCase().startsWith('ko'))||null;
+function reportAnnouncement(item,completed){
+  fetch('/api/announcement',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({cycle_id:item.cycleId,announcement:item.name,completed})
+  }).catch(()=>{});
 }
-if(window.speechSynthesis){pickVoice(); speechSynthesis.onvoiceschanged=pickVoice;}
-function say(text){
-  if(!window.speechSynthesis)return;
-  try{
-    speechSynthesis.cancel();
-    const u=new SpeechSynthesisUtterance(text); u.lang='ko-KR'; u.rate=1.05; u.volume=1;
-    if(koVoice)u.voice=koVoice; speechSynthesis.speak(u);
-  }catch(e){}
+function cancelAnnouncement(reportFailure=true){
+  if(!activeAnnouncement)return;
+  const item=activeAnnouncement; activeAnnouncement=null;
+  lastFinishedAnnouncementKey=item.key;
+  item.clip.onended=null; item.clip.onerror=null; item.clip.pause(); item.clip.currentTime=0;
+  if(reportFailure)reportAnnouncement(item,false);
+}
+function handleMotorAnnouncement(data){
+  const name=data.announcement; const clip=ANNOUNCEMENT_AUDIO[name];
+  if(!clip||data.state!==ANNOUNCEMENT_STATE[name]){cancelAnnouncement(false); return;}
+  const key=`${data.cycle_id}:${data.cycle_started_at}:${name}`;
+  if(lastFinishedAnnouncementKey===key)return;
+  if(activeAnnouncement&&activeAnnouncement.key===key)return;
+  cancelAnnouncement(false);
+  const item={key,cycleId:Number(data.cycle_id),name,clip}; activeAnnouncement=item;
+  clip.currentTime=0; clip.volume=1;
+  clip.onended=()=>{if(activeAnnouncement?.key!==key)return; activeAnnouncement=null; lastFinishedAnnouncementKey=key; reportAnnouncement(item,true);};
+  clip.onerror=()=>{if(activeAnnouncement?.key!==key)return; activeAnnouncement=null; lastFinishedAnnouncementKey=key; reportAnnouncement(item,false);};
+  clip.play().catch(()=>{if(activeAnnouncement?.key!==key)return; activeAnnouncement=null; lastFinishedAnnouncementKey=key; reportAnnouncement(item,false);});
 }
 let prevDecision=null;
 function detectSoundEvents(state){
   const isDanger=['RED','DANGER','FAULT'].includes(state);
   const wasDanger=['RED','DANGER','FAULT'].includes(prevDecision);
-  if(isDanger&&!wasDanger){startWarn(); say(state==='FAULT'?'시스템 오류. 상태를 확인하세요.':'위험. 하차하지 마세요.');}
+  if(isDanger&&!wasDanger){cancelAnnouncement(); startWarn();}
   if(!isDanger&&wasDanger)stopWarn();
-  if(state==='YELLOW'&&prevDecision!==null&&prevDecision!=='YELLOW') say('연석이 감지되었습니다. 정차 후 발판을 전개합니다.');
   prevDecision=state;
 }
 
@@ -311,7 +329,7 @@ function syncPowerState(active){
   powerLabel.textContent=isOn?'인지 중':'인지 대기';
   offScreen.style.opacity=isOn?'0':'1';
   offScreen.style.pointerEvents=isOn?'none':'auto';
-  if(!isOn){stopWarn(); prevDecision=null; resetSeat(); app.classList.remove('danger-active');}
+  if(!isOn){cancelAnnouncement(); stopWarn(); prevDecision=null; resetSeat(); app.classList.remove('danger-active');}
 }
 
 powerToggle.addEventListener('click',async()=>{
@@ -340,6 +358,7 @@ function renderSpeed(data){
   const el=document.getElementById('speedReadout'); const val=document.getElementById('speedVal');
   const fresh=data.speed_kmh!==null&&data.speed_kmh!==undefined&&Boolean(data.speed_fresh??data.fresh);
   el.classList.toggle('stale',!fresh); val.textContent=fresh?Number(data.speed_kmh).toFixed(1):'-';
+  if(fresh&&Number(data.speed_kmh)>0.1)cancelAnnouncement();
 
   const source=data.speed_source??data.source;
   const connected=data.obd_connected??data.connected;
@@ -451,28 +470,25 @@ function updateDeployButton(){
   rampSection.classList.toggle('active',Boolean(lastVision&&lastVision.final_decision==='YELLOW'));
 }
 
-function motorTransitionSpeech(state){
-  if(state===previousMotorState)return;
-  if(state==='DEPLOYING')say('발판을 전개합니다.');
-  if(state==='DEPLOYED_HOLD')say('발판 전개가 완료되었습니다. 5초 후 자동으로 수납합니다.');
-  if(state==='IDLE'&&previousMotorState==='RETRACTING')say('발판 수납이 완료되었습니다.');
-  previousMotorState=state;
-}
-
 function renderRampStatus(data){
   latestMotor=data; const state=data.state||'IDLE'; const progress=Math.max(0,Math.min(100,Number(data.progress||0)));
   rampProgressFill.style.width=progress+'%';
-  motorTransitionSpeech(state);
+  handleMotorAnnouncement(data);
 
-  const busy=['STARTING','DEPLOYING','DEPLOYED_HOLD','RETRACTING'].includes(state);
+  const busy=Boolean(data.busy);
   rampProgress.classList.toggle('show',busy||state==='ERROR');
-  retractBtn.style.display=['STARTING','DEPLOYING','DEPLOYED_HOLD'].includes(state)?'block':'none';
-  retractBtn.disabled=!['STARTING','DEPLOYING','DEPLOYED_HOLD'].includes(state);
+  const canRetract=['STARTING','ANNOUNCING_DEPLOY','DEPLOYING','ANNOUNCING_DEPLOYED','DEPLOYED_HOLD'].includes(state);
+  retractBtn.style.display=canRetract?'block':'none';
+  retractBtn.disabled=!canRetract;
 
   if(state==='STARTING')rampStatus.textContent='모터 시작 준비 중...';
+  else if(state==='ANNOUNCING_DEPLOY')rampStatus.textContent='전개 전 음성 안내 중...';
   else if(state==='DEPLOYING')rampStatus.textContent=`전개 중 · ${progress.toFixed(0)}%`;
+  else if(state==='ANNOUNCING_DEPLOYED')rampStatus.textContent='전개 완료 음성 안내 중...';
   else if(state==='DEPLOYED_HOLD')rampStatus.textContent=`전개 유지 중 · ${Number(data.hold_remaining_sec||0).toFixed(1)}초 후 자동 수납`;
+  else if(state==='ANNOUNCING_RETRACT')rampStatus.textContent='회수 전 음성 안내 중...';
   else if(state==='RETRACTING')rampStatus.textContent=`자동 수납 중 · ${progress.toFixed(0)}%`;
+  else if(state==='ANNOUNCING_RETRACTED')rampStatus.textContent='회수 완료 음성 안내 중...';
   else if(state==='ERROR')rampStatus.textContent='모터 오류: '+(data.error||'알 수 없음');
   else if(data.last_completed_at)rampStatus.textContent='자동 전개/수납 완료 · 다음 판단 세션 대기';
   else rampStatus.textContent=data.ready?'대기 중':'모터 초기화 대기';
@@ -488,7 +504,7 @@ async function sendRampCommand(action){
   unlockAudio();
   deployBtn.disabled=true; retractBtn.disabled=true;
   rampProgress.classList.add('show');
-  rampStatus.textContent=action==='deploy'?'전개 요청 중...':'즉시 수납 요청 중...';
+  rampStatus.textContent=action==='deploy'?'전개 요청 중...':'조기 회수 요청 중...';
   try{
     const endpoint=action==='deploy'?'/api/deploy':'/api/retract';
     const res=await fetch(endpoint,{method:'POST'}); const body=await res.json().catch(()=>({}));
@@ -500,7 +516,7 @@ async function sendRampCommand(action){
 
 
 setInterval(fetchVision,500);
-setInterval(fetchRampStatus,250);
+setInterval(fetchRampStatus,50);
 fetchSpeed();
 fetchVision();
 fetchRampStatus();
